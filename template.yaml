@@ -1,0 +1,127 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  s3-event-app
+
+Parameters:
+  AppBucketName:
+    Type: String
+    Description: "REQUIRED: Unique S3 bucket name to use for the app."
+
+Resources:
+  S3EventDBFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: src/handlers/s3-event-db.s3EventDatabaseHandler
+      Runtime: nodejs14.x
+      MemorySize: 128
+      Timeout: 60
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref AppBucketName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref S3EventTable
+      Environment:
+        Variables:
+          S3_EVENT_TABLE: !Ref S3EventTable
+      Events:
+        S3NewObjectEvent:
+          Type: S3
+          Properties:
+            Bucket: !Ref AppBucket
+            Events: s3:ObjectCreated:*
+        S3RemoveObjectEvent:
+          Type: S3
+          Properties:
+            Bucket: !Ref AppBucket
+            Events: s3:ObjectRemoved:*
+
+  S3EventHttpEndpoint:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      Handler: src/handlers/s3-event-api.s3EventApiHandler
+      Runtime: nodejs14.x
+      MemorySize: 128
+      Timeout: 20     
+      Policies:        
+        - DynamoDBReadPolicy:
+            TableName: !Ref S3EventTable
+      Environment:
+        Variables:
+          S3_EVENT_TABLE: !Ref S3EventTable 
+      Events:
+        S3EventApi:
+          Type: Api
+          Properties:
+            Path: /events/object
+            Method: GET
+
+  S3DynamodbStreamFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      Handler: src/handlers/s3-db-stream.s3EventDbStreamHandler
+      Runtime: nodejs14.x
+      MemorySize: 128
+      Timeout: 20     
+      Policies:        
+        - DynamoDBCrudPolicy:
+            TableName: !Ref S3EventTable
+      Environment:
+        Variables:
+          S3_EVENT_TABLE: !Ref S3EventTable 
+      Events:
+        DynamoDBEvent:
+          Type: DynamoDB
+          Properties:
+            Stream:
+              !GetAtt S3EventTable.StreamArn
+            StartingPosition: LATEST
+            BatchSize: 1
+
+  AppBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref AppBucketName
+      
+  S3EventTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: S3EventTable2
+      AttributeDefinitions:
+        - AttributeName: fileName
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S       
+        - AttributeName: versionId
+          AttributeType: S          
+      KeySchema:
+        - AttributeName: fileName
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE  
+      ProvisionedThroughput: 
+        ReadCapacityUnits: 4
+        WriteCapacityUnits: 4
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
+      LocalSecondaryIndexes:
+        - IndexName: versionLSI         
+          KeySchema:
+            - AttributeName: fileName
+              KeyType: HASH
+            - AttributeName: versionId
+              KeyType: RANGE
+          Projection:
+            ProjectionType: KEYS_ONLY
+      GlobalSecondaryIndexes:
+        - IndexName: versionGSI           
+          KeySchema:
+            - AttributeName: versionId
+              KeyType: HASH
+            - AttributeName: fileName
+              KeyType: RANGE
+          Projection:
+            ProjectionType: KEYS_ONLY
+          ProvisionedThroughput: 
+            ReadCapacityUnits: 4
+            WriteCapacityUnits: 4
